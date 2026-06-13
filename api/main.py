@@ -246,3 +246,79 @@ def get_risk_score(train_id: str):
         },
         "active_reports": len(train_reports)
     }
+
+
+class SimulateRequest(BaseModel):
+    """
+    Inputs for the live Convergence Engine demo.
+    Each factor is 0-100 (higher = riskier). Defaults provided so the
+    endpoint works even if only some sliders are moved.
+    """
+    infra_risk_score: float = Field(30.0, ge=0, le=100, example=40.0,
+                                     description="Track/infrastructure health risk (0-100)")
+    cyber_risk_score: float = Field(20.0, ge=0, le=100, example=25.0,
+                                     description="Cyber/OT anomaly risk (0-100)")
+    signal_delay_score: float = Field(10.0, ge=0, le=100, example=15.0,
+                                       description="Signal update delay risk (0-100, e.g. 6s delay vs 10s threshold -> ~60)")
+    crew_fatigue_index: float = Field(20.0, ge=0, le=100, example=70.0,
+                                       description="Crew alertness/fatigue risk score (0-100), from fatigue model")
+
+
+@app.post("/simulate")
+def simulate_ccrs(req: SimulateRequest):
+    """
+    PRAHARI Convergence Engine — live what-if simulation.
+
+    Combines four risk signals (infrastructure, cyber, signal delay, crew fatigue)
+    into a single Composite Convergence Risk Score (CCRS) with a full breakdown,
+    matching the worked example in the PRAHARI proposal (Section 4).
+
+    Designed to power an interactive slider dashboard: send current slider
+    values, get back the live CCRS + recommended action.
+    """
+    weights = {
+        "crew_fatigue_index": 0.35,
+        "signal_delay_score": 0.30,
+        "infra_risk_score": 0.20,
+        "cyber_risk_score": 0.15,
+    }
+
+    values = {
+        "crew_fatigue_index": req.crew_fatigue_index,
+        "signal_delay_score": req.signal_delay_score,
+        "infra_risk_score": req.infra_risk_score,
+        "cyber_risk_score": req.cyber_risk_score,
+    }
+
+    ccrs = round(sum(values[k] * weights[k] for k in weights), 1)
+
+    if ccrs >= 75:
+        level = "Critical"
+        action = ("Impose advisory speed restriction (40 km/h). "
+                  "Alert relief crew point at next station. "
+                  "Flag section for priority inspection.")
+    elif ccrs >= 55:
+        level = "High"
+        action = ("Increase monitoring frequency. "
+                  "Notify loco pilot and station master. "
+                  "Schedule inspection within 24 hours.")
+    elif ccrs >= 30:
+        level = "Warning"
+        action = "Continue normal operations with routine monitoring."
+    else:
+        level = "Safe"
+        action = "No action required."
+
+    breakdown_pct = {
+        k: round((values[k] * weights[k] / ccrs * 100) if ccrs > 0 else 0, 1)
+        for k in weights
+    }
+
+    return {
+        "ccrs": ccrs,
+        "risk_level": level,
+        "recommended_action": action,
+        "inputs": values,
+        "weights": weights,
+        "contribution_percent": breakdown_pct,
+    }
