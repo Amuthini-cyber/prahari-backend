@@ -197,6 +197,12 @@ def get_risk_score(train_id: str):
       - Cyber risk (sample signaling asset check)
       - Public reports (count of unresolved reports for this train)
     """
+    return compute_risk_score(train_id)
+
+
+def compute_risk_score(train_id: str):
+    """Internal helper: computes CCRS for a given train_id. Reused by
+    /risk-score/{train_id}, /trains, and /dashboard-summary."""
     # crude mapping: use train_id's first 5 chars to pick a "route" deterministically
     routes = track_df["route"].unique()
     route = routes[hash(train_id) % len(routes)]
@@ -246,6 +252,54 @@ def get_risk_score(train_id: str):
         },
         "active_reports": len(train_reports)
     }
+
+
+# ---------------------------------------------------------------------------
+# Command Center support endpoints
+# ---------------------------------------------------------------------------
+
+# Sample fleet of train numbers for demo purposes (matches PRAHARI mockup style)
+DEMO_TRAIN_IDS = ["12627", "12651", "12711", "16317", "12621", "12609", "16723", "12693"]
+
+
+@app.get("/trains")
+def list_trains(limit: int = 20):
+    """
+    Live Train Risk Status table — returns CCRS + risk level for a fleet of
+    trains, for the Command Center dashboard table/heatmap.
+    """
+    results = [compute_risk_score(tid) for tid in DEMO_TRAIN_IDS[:limit]]
+    # sort by CCRS descending so highest-risk trains appear first
+    results.sort(key=lambda r: r["ccrs"], reverse=True)
+    return results
+
+
+@app.get("/dashboard-summary")
+def dashboard_summary():
+    """
+    Aggregate stats for the Command Center top bar:
+    Active Trains, High Risk Trains, Critical Alerts, Open Reports.
+    """
+    train_scores = [compute_risk_score(tid) for tid in DEMO_TRAIN_IDS]
+
+    active_trains = len(train_scores)
+    high_risk_trains = sum(1 for t in train_scores if t["risk_level"] in ("High", "Critical"))
+    critical_alerts = sum(1 for t in train_scores if t["risk_level"] == "Critical")
+    open_reports = sum(1 for r in reports_db if r["status"] != "Resolved")
+
+    # Critical track segments (for heatmap context)
+    critical_segments = int((track_df["risk_level"] == "Critical").sum())
+
+    return {
+        "active_trains": active_trains,
+        "high_risk_trains": high_risk_trains,
+        "critical_alerts": critical_alerts,
+        "open_reports": open_reports,
+        "critical_track_segments": critical_segments,
+        "trains": train_scores
+    }
+
+
 
 
 class SimulateRequest(BaseModel):
